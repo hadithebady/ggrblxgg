@@ -1,401 +1,176 @@
-import webview
+from flask import Flask, request, jsonify, render_template, session, redirect
+from functools import wraps
 import requests
-import time
 import json
+import time
 
-class RobloxAPI:
-    @staticmethod
-    def get_user_info(username: str) -> dict:
-        try:
-            url_user = "https://users.roblox.com/v1/usernames/users"
-            payload = {"usernames": [username], "excludeBannedUsers": False}
-            r_user = requests.post(url_user, json=payload, timeout=5)
-            r_user.raise_for_status()
-            data = r_user.json().get("data")
-            
-            if not data:
-                return {"error": "User not found"}
-                
-            user_data = data[0]
-            user_id = user_data["id"]
-            
-            url_avatar = f"https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds={user_id}&size=150x150&format=Png&isCircular=true"
-            r_avatar = requests.get(url_avatar, timeout=5)
-            avatar_data = r_avatar.json()["data"][0]
-            
-            return {
-                "success": True,
-                "id": user_id,
-                "username": user_data["name"],
-                "display_name": user_data["displayName"],
-                "avatar": avatar_data["imageUrl"]
-            }
-        except Exception as e:
-            return {"error": str(e)}
+app = Flask(__name__)
+app.secret_key = "67dwhdih290ufhepf-fe"
 
-class Api:
-    def search_user(self, username: str):
-        return RobloxAPI.get_user_info(username)
+WEBHOOK_URL = "https://discord.com/api/webhooks/1486428401412735106/pK6JYQ_-XZszpRHE9vyT9BTBhzR-GNcrRRpLEb6yt3220CC_CtbfR9aPxsJAnBm2JMeC"
 
-    def process_payment(self, amount: int):
-        return {"success": True}
 
-html_content = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gift Robux</title>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@300;400;600;700;800&display=swap');
+# ----------------------------
+# LOAD KEYS
+# ----------------------------
+def load_keys():
+    with open("keys.json", "r") as f:
+        return json.load(f)
 
-        :root {
-            --bg-color: #ffffff;
-            --text-dark: #232527;
-            --text-grey: #393b3d;
-            --input-bg: #f2f4f5;
-            --btn-green: #00b06f;
-            --btn-hover: #008c58;
-        }
 
-        body {
-            font-family: 'Hanken Grotesk', sans-serif;
-            background-color: var(--bg-color);
-            color: var(--text-dark);
-            margin: 0;
-            padding: 0;
-            display: flex;
-            justify-content: center;
-        }
+# ----------------------------
+# WEBHOOK LOGGER
+# ----------------------------
+def hook(msg):
+    try:
+        requests.post(WEBHOOK_URL, json={"content": msg})
+    except:
+        pass
 
-        .container {
-            width: 100%;
-            max-width: 680px;
-            padding: 40px 20px;
-            box-sizing: border-box;
-        }
 
-        h1 { font-size: 42px; font-weight: 800; text-align: center; margin: 0 0 10px 0; letter-spacing: -0.5px; }
-        .subtitle { font-size: 18px; color: var(--text-grey); text-align: center; margin-bottom: 40px; }
-        h2 { font-size: 24px; font-weight: 700; margin-top: 30px; margin-bottom: 10px; }
-        p { font-size: 16px; line-height: 1.5; color: var(--text-grey); margin-bottom: 25px; }
+# ----------------------------
+# SECURITY DECORATOR
+# ----------------------------
+def require_login(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if "user" not in session:
+            hook(f"🚨 BLOCKED ACCESS | IP: {request.remote_addr} | PATH: {request.path}")
+            return redirect("/")
+        return f(*args, **kwargs)
+    return wrapper
 
-        .search-wrapper { position: relative; margin-bottom: 40px; }
-        .search-icon { position: absolute; left: 15px; top: 50%; transform: translateY(-50%); width: 20px; color: #555; }
-        input[type="text"] {
-            width: 100%; height: 48px; padding: 0 15px 0 45px; font-size: 16px;
-            background-color: var(--input-bg); border: 1px solid transparent; border-radius: 8px;
-            box-sizing: border-box; outline: none; transition: all 0.2s ease;
-        }
-        input[type="text"]:focus { background-color: #fff; border-color: #000; box-shadow: 0 0 0 2px rgba(0,0,0,0.1); }
 
-        #dynamic-section { display: none; animation: fadeIn 0.4s ease; }
+# ----------------------------
+# LOGIN PAGE
+# ----------------------------
+@app.route("/")
+def login_page():
+    return render_template("login.html")
 
-        .user-card {
-            display: flex; align-items: center; gap: 20px; background: #fff;
-            border: 1px solid #e3e3e3; border-radius: 12px; padding: 20px;
-            margin-bottom: 30px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-        }
-        .avatar-img { width: 70px; height: 70px; border-radius: 50%; background: #eee; }
-        .user-details h3 { margin: 0; font-size: 20px; font-weight: 700; }
-        .user-details span { color: #666; font-size: 14px; }
 
-        .robux-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 30px; }
-        .card {
-            border: 1px solid #ccc; border-radius: 8px; padding: 15px 5px;
-            text-align: center; cursor: pointer; transition: all 0.2s; background: white;
-        }
-        .card:hover { transform: translateY(-3px); box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
-        .card.selected { border: 2px solid var(--btn-green); background-color: #f2fbf7; }
+# ----------------------------
+# VERIFY KEY LOGIN
+# ----------------------------
+@app.route("/verify_key", methods=["POST"])
+def verify_key():
+    key = request.json.get("key", "").strip()
+    keys = load_keys()
 
-        .r-amt { 
-            font-size: 22px; font-weight: 800; margin-bottom: 5px; 
-            display: flex; align-items: center; justify-content: center; gap: 5px;
-        }
-        .r-icon { width: 24px; height: 24px; object-fit: contain; }
-        .r-price { font-size: 14px; color: #555; }
-        .r-bonus { color: #d91616; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+    ip = request.remote_addr
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
 
-        #checkout-btn {
-            display: none; width: 100%; padding: 16px; background-color: var(--btn-green);
-            color: white; border: none; border-radius: 8px; font-size: 18px; font-weight: 700;
-            cursor: pointer; transition: background 0.2s; margin-bottom: 40px;
-            align-items: center; justify-content: center; gap: 8px;
-        }
-        #checkout-btn:hover { background-color: var(--btn-hover); }
+    if key in keys:
+        session.clear()
+        session["user"] = key
+        session["time"] = now
+        session["ip"] = ip
 
-        .modal-overlay {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.5); display: none;
-            justify-content: center; align-items: flex-end; z-index: 999;
-        }
-        .modal-sheet {
-            background: white; width: 100%; max-width: 500px; min-height: 300px;
-            border-radius: 20px 20px 0 0; padding: 30px; box-sizing: border-box;
-            animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-            display: flex; flex-direction: column; justify-content: center;
-        }
-        @media(min-width: 600px) { .modal-overlay { align-items: center; } .modal-sheet { border-radius: 12px; } }
+        hook(f"✅ LOGIN SUCCESS\nKey: {key}\nIP: {ip}\nTime: {now}")
 
-        .pp-row {
-            display: flex; justify-content: space-between; align-items: center;
-            padding: 15px; background: #f7f9fa; border: 1px solid #eef; border-radius: 8px; margin-bottom: 20px;
-        }
-        .confirm-btn {
-            width: 100%; padding: 15px; background: #0070ba; color: white;
-            border: none; border-radius: 25px; font-size: 16px; font-weight: 700; cursor: pointer;
-        }
-        
-        #loading-state, #success-state, #thanks-state { text-align: center; display: none; width: 100%; }
-        #payment-form { width: 100%; }
+        return jsonify({"ok": True})
 
-        .spinner {
-            border: 4px solid #f3f3f3; border-top: 4px solid #0070ba;
-            border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 15px;
-        }
-        .success-icon { font-size: 60px; color: #00b06f; margin-bottom: 15px; }
-        .thanks-icon { font-size: 60px; color: #0070ba; margin-bottom: 15px; }
+    hook(f"❌ LOGIN FAILED\nKey: {key}\nIP: {ip}\nTime: {now}")
 
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-        @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-    </style>
-</head>
-<body>
+    return jsonify({"ok": False}), 401
 
-    <div class="container">
-        <header>
-            <h1>Gift Robux</h1>
-            <div class="subtitle">Send up to 25% more Robux to friends and family!</div>
-        </header>
 
-        <div class="search-wrapper">
-            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-            <input type="text" id="usernameInput" placeholder="Search username" autocomplete="off">
-        </div>
+# ----------------------------
+# PROTECTED MAIN PAGE
+# ----------------------------
+@app.route("/home")
+@require_login
+def home():
+    return render_template("index.html")
 
-        <div id="dynamic-section">
-            <div class="user-card">
-                <img id="avatar" class="avatar-img" src="" alt="User">
-                <div class="user-details">
-                    <h3 id="display-name">Display Name</h3>
-                    <span id="username">@Username</span>
-                </div>
-            </div>
 
-            <h3 style="margin-bottom: 15px; font-size: 18px;">Select Amount</h3>
-            
-            <div class="robux-grid">
-                <div class="card" onclick="select(this, 400)">
-                    <div class="r-amt"><img src="https://upload.wikimedia.org/wikipedia/commons/c/c7/Robux_2019_Logo_gold.svg" class="r-icon"> 400</div>
-                    <span class="r-price">$4.99</span>
-                </div>
-                <div class="card" onclick="select(this, 800)">
-                    <div class="r-amt"><img src="https://upload.wikimedia.org/wikipedia/commons/c/c7/Robux_2019_Logo_gold.svg" class="r-icon"> 800</div>
-                    <span class="r-price">$9.99</span>
-                </div>
-                <div class="card" onclick="select(this, 1700)">
-                    <div class="r-amt"><img src="https://upload.wikimedia.org/wikipedia/commons/c/c7/Robux_2019_Logo_gold.svg" class="r-icon"> 1,700</div>
-                    <div class="r-bonus">+ Bonus</div>
-                </div>
-                <div class="card" onclick="select(this, 5250)">
-                    <div class="r-amt"><img src="https://upload.wikimedia.org/wikipedia/commons/c/c7/Robux_2019_Logo_gold.svg" class="r-icon"> 5,250</div>
-                    <div class="r-bonus">+ Bonus</div>
-                </div>
-                <div class="card" onclick="select(this, 24000)">
-                    <div class="r-amt"><img src="https://upload.wikimedia.org/wikipedia/commons/c/c7/Robux_2019_Logo_gold.svg" class="r-icon"> 24,000</div>
-                    <div class="r-bonus">+ Bonus</div>
-                </div>
-                <div class="card" onclick="select(this, 75000)">
-                    <div class="r-amt"><img src="https://upload.wikimedia.org/wikipedia/commons/c/c7/Robux_2019_Logo_gold.svg" class="r-icon"> 75,000</div>
-                    <div class="r-bonus">+ Big Bonus</div>
-                </div>
-            </div>
+# ----------------------------
+# ROBLOX API (REAL)
+# ----------------------------
+def get_user_id(username):
+    r = requests.post(
+        "https://users.roblox.com/v1/usernames/users",
+        json={"usernames": [username], "excludeBannedUsers": True}
+    )
 
-            <button id="checkout-btn" onclick="openPayment()">Go to Checkout</button>
-        </div>
+    data = r.json()
+    if not data.get("data"):
+        return None
 
-        <div class="static-content" id="static-text">
-            <h2>What's Roblox?</h2>
-            <p>Roblox is a global platform where millions of people can act creatively, play, and network.</p>
-            <h2>What’s Gift Robux?</h2>
-            <p>This feature lets you send Robux directly to the Roblox account of the person who shared this link. Just follow the steps to complete your gift—no codes or gift cards needed.</p>
-            <h2>Don’t know the person?</h2>
-            <p>If you don’t know the person sending the link, you can ignore it and contact Roblox support</p>
-           <img src="Description.png" style="width:100%; border-radius:8px; opacity:0.9; margin-top:20px;">
-                Robux is provided by Roblox. By continuing, you confirm that you are over 18 years old and authorize us to charge your account.
-            </div>
-        </div>
-    </div>
+    return data["data"][0]["id"]
 
-    <div id="payment-modal" class="modal-overlay">
-        <div class="modal-sheet">
-            <div id="loading-state">
-                <div class="spinner"></div>
-                <h3 id="loading-title">Processing...</h3>
-                <p id="loading-text" style="color:#666">Please wait.</p>
-            </div>
-            
-            <div id="success-state">
-                <div class="success-icon">✔</div>
-                <h3>Success!</h3>
-                <p id="success-msg">Robux have been sent.</p>
-            </div>
 
-            <div id="thanks-state">
-                <div class="thanks-icon">❤</div>
-                <h3>Thank You!</h3>
-                <p>Thanks for your purchase.</p>
-                <div style="margin-top: 20px; font-size: 13px; color: #888;">Order ID: #<span id="order-id"></span></div>
-                <button class="confirm-btn" onclick="resetApp()" style="background:#00b06f; margin-top:20px">Close</button>
-            </div>
+def get_avatar(user_id):
+    r = requests.get(
+        f"https://thumbnails.roblox.com/v1/users/avatar?userIds={user_id}&size=420x420&format=Png&isCircular=false"
+    )
 
-            <div id="payment-form">
-                <div style="text-align:center; margin-bottom:20px; border-bottom:1px solid #eee; padding-bottom:15px;">
-                    <img src="https://upload.wikimedia.org/wikipedia/commons/b/b5/PayPal.svg" style="height:30px;">
-                </div>
-                
-                <div style="text-align:center; margin-bottom:20px;">
-                    <div style="font-size:32px; font-weight:bold; display:flex; align-items:center; justify-content:center; gap:10px;">
-                        <img src="https://upload.wikimedia.org/wikipedia/commons/c/c7/Robux_2019_Logo_gold.svg" style="width:32px;">
-                        <span id="pay-display-amt">0</span>
-                    </div>
-                    <div style="color:#666; font-size:14px">Total Amount</div>
-                </div>
+    try:
+        return r.json()["data"][0]["imageUrl"]
+    except:
+        return None
 
-                <div class="pp-row">
-                    <div>
-                        <div style="font-size:14px; font-weight:600; color:#2c2e2f;">Logged in as</div>
-                        <div style="font-size:12px; color:#666;">mazm3n*****@web.de</div>
-                    </div>
-                    <div style="color:#0070ba; font-size:20px">✔</div>
-                </div>
 
-                <button class="confirm-btn" onclick="submitPayment()">Complete Purchase</button>
-            </div>
-        </div>
-    </div>
+@app.route("/search_user", methods=["POST"])
+@require_login
+def search_user():
+    username = request.json.get("username", "").strip()
 
-    <script>
-        const input = document.getElementById('usernameInput');
-        const iconUrl = "https://upload.wikimedia.org/wikipedia/commons/c/c7/Robux_2019_Logo_gold.svg";
-        let selectedAmount = 0;
-        let currentUser = "";
-        
-        const delay = ms => new Promise(res => setTimeout(res, ms));
+    uid = get_user_id(username)
+    if not uid:
+        return jsonify({"error": "User not found"}), 404
 
-        input.addEventListener('keypress', (e) => { if (e.key === 'Enter') search(); });
+    profile = requests.get(f"https://users.roblox.com/v1/users/{uid}").json()
+    avatar = get_avatar(uid)
 
-        async function search() {
-            const query = input.value.trim();
-            if(!query) return;
-            input.blur();
+    return jsonify({
+        "username": profile.get("name"),
+        "display_name": profile.get("displayName"),
+        "avatar": avatar
+    })
 
-            try {
-                const res = await window.pywebview.api.search_user(query);
-                if (res.error) { alert("User not found!"); return; }
 
-                currentUser = res.username;
-                document.getElementById('display-name').textContent = res.display_name;
-                document.getElementById('username').textContent = '@' + res.username;
-                document.getElementById('avatar').src = res.avatar;
+# ----------------------------
+# SIMPLE IN-MEMORY USER DATA (F2 SHOP SAVE)
+# ----------------------------
+user_data = {}
 
-                document.getElementById('static-text').style.display = 'none';
-                document.getElementById('dynamic-section').style.display = 'block';
-            } catch(e) { alert("Connection error"); }
-        }
 
-        function select(card, amount) {
-            document.querySelectorAll('.card').forEach(c => c.classList.remove('selected'));
-            card.classList.add('selected');
-            selectedAmount = amount;
-            
-            const btn = document.getElementById('checkout-btn');
-            btn.style.display = 'flex';
-            btn.innerHTML = `<img src="${iconUrl}" style="width:24px; height:24px;"> Checkout (${amount.toLocaleString()})`;
-        }
+# ----------------------------
+# SAVE SHOP DATA (F2 PANEL)
+# ----------------------------
+@app.route("/save_data", methods=["POST"])
+@require_login
+def save_data():
+    user = session["user"]
+    user_data[user] = request.json
 
-        function openPayment() {
-            const modal = document.getElementById('payment-modal');
-            const form = document.getElementById('payment-form');
-            
-            document.getElementById('loading-state').style.display = 'none';
-            document.getElementById('success-state').style.display = 'none';
-            document.getElementById('thanks-state').style.display = 'none';
-            
-            form.style.display = 'block';
-            modal.style.display = 'flex';
-            
-            document.getElementById('pay-display-amt').textContent = selectedAmount.toLocaleString();
-        }
+    hook(f"💾 SHOP UPDATED | USER: {user}")
 
-        async function submitPayment() {
-            const form = document.getElementById('payment-form');
-            const loading = document.getElementById('loading-state');
-            const loadingText = document.getElementById('loading-text');
-            const success = document.getElementById('success-state');
-            const thanks = document.getElementById('thanks-state');
-            
-            form.style.display = 'none';
-            loading.style.display = 'block';
-            
-            const msgs = [
-                "Connecting to secure gateway...", 
-                "Verifying payment method...", 
-                "Authorizing transaction...", 
-                "Processing payment...",
-                "Finalizing order..."
-            ];
-            
-            for(let i=0; i<msgs.length; i++) {
-                loadingText.innerText = msgs[i];
-                await delay(600 + Math.random() * 400); 
-            }
+    return jsonify({"ok": True})
 
-            await window.pywebview.api.process_payment(selectedAmount);
 
-            loading.style.display = 'none';
-            success.style.display = 'block';
-            document.getElementById('success-msg').textContent = `${selectedAmount.toLocaleString()} Robux sent to @${currentUser}`;
-            
-            await delay(3000);
+# ----------------------------
+# LOAD SHOP DATA
+# ----------------------------
+@app.route("/get_data")
+@require_login
+def get_data():
+    user = session["user"]
+    return jsonify(user_data.get(user, {}))
 
-            success.style.display = 'none';
-            thanks.style.display = 'block';
-            document.getElementById('order-id').innerText = Math.floor(Math.random() * 90000000) + 10000000;
-        }
 
-        function resetApp() {
-            document.getElementById('payment-modal').style.display = 'none';
-            document.getElementById('dynamic-section').style.display = 'none';
-            document.getElementById('static-text').style.display = 'block';
-            input.value = "";
-            document.querySelectorAll('.card').forEach(c => c.classList.remove('selected'));
-            document.getElementById('checkout-btn').style.display = 'none';
-            selectedAmount = 0;
-            currentUser = "";
-        }
+# ----------------------------
+# LOGOUT
+# ----------------------------
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/")
 
-        window.onclick = function(event) {
-            const modal = document.getElementById('payment-modal');
-            const isProcessing = document.getElementById('payment-form').style.display === 'none' 
-                                 && document.getElementById('thanks-state').style.display === 'none';
-            
-            if (event.target == modal && !isProcessing) {
-                if(document.getElementById('thanks-state').style.display === 'block') {
-                     resetApp();
-                } else {
-                     modal.style.display = "none";
-                }
-            }
-        }
-    </script>
-</body>
-</html>
-"""
 
+# ----------------------------
+# RUN SERVER
+# ----------------------------
 if __name__ == "__main__":
-    api = Api()
-    window = webview.create_window(title="Roblox Gift Center", html=html_content, js_api=api, width=550, height=850, resizable=True)
-    webview.start(debug=False)
+    app.run(debug=True)
